@@ -1,20 +1,21 @@
 FROM python:3.11-slim
 
-# 1. Install FFmpeg and Git (git is needed for some yt-dlp dependencies)
+# Install system dependencies
+# ffmpeg: For audio conversion
+# git: For yt-dlp dependencies
+# libopus-dev: REQUIRED for Discord voice audio
+# libffi-dev & libsodium-dev: Required for PyNaCl (voice encryption)
+# nodejs: Fixes the yt-dlp "JavaScript" warning and speeds up downloads
 RUN apt-get update && \
-    apt-get install -y ffmpeg git && \
+    apt-get install -y ffmpeg git libopus-dev libffi-dev libsodium-dev nodejs && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# 2. Set up the working directory
 WORKDIR /app
 
-# 3. Copy your requirements and install them
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 4. Copy the rest of your code
 COPY . .
 
-# 5. The command to start your bot
 CMD ["python", "musicbot.py"]
