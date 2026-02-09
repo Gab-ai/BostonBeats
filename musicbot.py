@@ -13,7 +13,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 DOWNLOADS_DIR = './downloads'
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
-# Define the bot with necessary intents
+# Define the bot
 intents = discord.Intents.default()
 intents.message_content = True 
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -21,22 +21,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 song_queue = asyncio.Queue()
 
 def download_audio(url):
-    # 1. Check Cache First
-    ydl_opts_info = {'quiet': True, 'no_warnings': True, 'format': 'bestaudio/best'}
-    with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
-        try:
-            info = ydl.extract_info(url, download=False)
-            # Create a safe filename check
-            title = info.get('title', 'song').replace('/', '_')
-            expected_file = os.path.join(DOWNLOADS_DIR, f"{title}.m4a")
-            
-            if os.path.exists(expected_file):
-                print(f"--- Cache Hit: {expected_file} ---")
-                return expected_file
-        except:
-            pass
-
-    # 2. Download if not cached
     ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{
@@ -44,9 +28,10 @@ def download_audio(url):
             'preferredcodec': 'm4a',
             'preferredquality': '192',
         }],
-        'ffmpeg_location': 'ffmpeg', 
+        # DELETED: 'ffmpeg_location' (Let Railway find it automatically)
+        # DELETED: 'ffprobe_location'
         'quiet': True,
-        'outtmpl': f'{DOWNLOADS_DIR}/%(title)s.m4a',
+        'outtmpl': f'{DOWNLOADS_DIR}/%(title)s.m4a', # FIXED: Relative path
         'default_search': 'ytsearch',
         'nocheckcertificate': True
     }
@@ -97,7 +82,7 @@ async def play_next_song(ctx):
             return
 
         source = discord.FFmpegPCMAudio(
-            executable="ffmpeg",
+            executable="ffmpeg", # FIXED: Removed /usr/bin/
             source=audio_file,
             before_options="-nostdin",
             options="-vn"
@@ -109,6 +94,7 @@ async def play_next_song(ctx):
 
 @bot.command()
 async def play(ctx, url):
+    # Added your playlist support back in
     if "list=" in url:
         await ctx.send(f"Playlist detected! Processing first 10 songs... 📜")
         ydl_opts = {'quiet': True, 'extract_flat': True, 'playlistend': 10}
@@ -130,7 +116,6 @@ async def play(ctx, url):
 async def leave(ctx):
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
-        # Clean up files to keep Railway storage happy
         for file in os.listdir(DOWNLOADS_DIR):
             try: os.remove(os.path.join(DOWNLOADS_DIR, file))
             except: pass
