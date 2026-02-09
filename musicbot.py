@@ -87,3 +87,66 @@ async def add_to_queue(ctx, url):
 
     if ctx.voice_client is None:
         if ctx.author.voice:
+            await ctx.author.voice.channel.connect()
+        else:
+            await ctx.send("You need to be in a voice channel!")
+            return
+
+    if not ctx.voice_client.is_playing():
+        await play_next_song(ctx)
+
+async def play_next_song(ctx):
+    if not song_queue.empty():
+        audio_file = await song_queue.get()
+        
+        if not audio_file or not os.path.exists(audio_file):
+            await play_next_song(ctx)
+            return
+
+        source = discord.FFmpegPCMAudio(
+            executable=FFMPEG_PATH, # <--- USE THE FOUND PATH HERE TOO
+            source=audio_file,
+            before_options="-nostdin",
+            options="-vn"
+        )
+
+        ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next_song(ctx), bot.loop))
+    else:
+        await ctx.send("Queue is empty.")
+
+@bot.command()
+async def play(ctx, url):
+    if "list=" in url:
+        await ctx.send(f"Playlist detected! Processing first 10 songs... 📜")
+        ydl_opts = {'quiet': True, 'extract_flat': True, 'playlistend': 10}
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                info = ydl.extract_info(url, download=False)
+                for entry in info.get('entries', []):
+                    song_url = entry.get('url')
+                    if song_url:
+                        if not song_url.startswith('http'):
+                            song_url = f"https://www.youtube.com/watch?v={song_url}"
+                        await add_to_queue(ctx, song_url)
+            except Exception as e:
+                await ctx.send(f"Playlist error: {e}")
+    else:
+        await add_to_queue(ctx, url)
+
+@bot.command()
+async def leave(ctx):
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        for file in os.listdir(DOWNLOADS_DIR):
+            try: os.remove(os.path.join(DOWNLOADS_DIR, file))
+            except: pass
+    else:
+        await ctx.send("I'm not in a voice channel!")
+
+@bot.command()
+async def skip(ctx):
+    if ctx.voice_client and ctx.voice_client.is_playing():
+        ctx.voice_client.stop()
+        await ctx.send("Skipped! ⏭️")
+
+bot.run(TOKEN)
