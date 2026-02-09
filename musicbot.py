@@ -4,7 +4,6 @@ import yt_dlp
 import asyncio
 import concurrent.futures
 import os
-import shutil  # <--- NEW: This tool finds installed programs
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,14 +13,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 DOWNLOADS_DIR = './downloads'
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
-# --- THE FIX: Find FFmpeg automatically ---
-FFMPEG_PATH = shutil.which("ffmpeg") or "ffmpeg"
-# Print it to the logs so we can verify it was found
-print(f"------------------------------------------------")
-print(f"SYSTEM CHECK: FFmpeg found at: {FFMPEG_PATH}")
-print(f"------------------------------------------------")
-# ------------------------------------------
-
+# Define the bot
 intents = discord.Intents.default()
 intents.message_content = True 
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -29,20 +21,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 song_queue = asyncio.Queue()
 
 def download_audio(url):
-    # 1. Check Cache
-    ydl_opts_info = {'quiet': True, 'no_warnings': True, 'format': 'bestaudio/best'}
-    with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
-        try:
-            info = ydl.extract_info(url, download=False)
-            title = info.get('title', 'song').replace('/', '_')
-            expected_file = os.path.join(DOWNLOADS_DIR, f"{title}.m4a")
-            if os.path.exists(expected_file):
-                print(f"--- Cache Hit: {expected_file} ---")
-                return expected_file
-        except:
-            pass
-
-    # 2. Download
     ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{
@@ -50,8 +28,8 @@ def download_audio(url):
             'preferredcodec': 'm4a',
             'preferredquality': '192',
         }],
-        # USE THE FOUND PATH HERE
-        'ffmpeg_location': FFMPEG_PATH, 
+        # DOCKER FIX: We do NOT set 'ffmpeg_location'. 
+        # Docker installs it globally, so yt-dlp finds it automatically.
         'quiet': True,
         'outtmpl': f'{DOWNLOADS_DIR}/%(title)s.m4a',
         'default_search': 'ytsearch',
@@ -79,7 +57,7 @@ async def add_to_queue(ctx, url):
     audio_file = await async_download_audio(url)
     
     if audio_file is None:
-        await ctx.send("Could not download that song. (Check logs for ffmpeg error)")
+        await ctx.send("Could not download that song. (FFmpeg error)")
         return
 
     await song_queue.put(audio_file)
@@ -104,7 +82,7 @@ async def play_next_song(ctx):
             return
 
         source = discord.FFmpegPCMAudio(
-            executable=FFMPEG_PATH, # <--- USE THE FOUND PATH HERE TOO
+            executable="ffmpeg", # Docker puts ffmpeg in the global path
             source=audio_file,
             before_options="-nostdin",
             options="-vn"
