@@ -4,6 +4,7 @@ import yt_dlp
 import asyncio
 import concurrent.futures
 import os
+import shutil  # <--- NEW: This tool finds installed programs
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,7 +14,14 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 DOWNLOADS_DIR = './downloads'
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
-# Define the bot
+# --- THE FIX: Find FFmpeg automatically ---
+FFMPEG_PATH = shutil.which("ffmpeg") or "ffmpeg"
+# Print it to the logs so we can verify it was found
+print(f"------------------------------------------------")
+print(f"SYSTEM CHECK: FFmpeg found at: {FFMPEG_PATH}")
+print(f"------------------------------------------------")
+# ------------------------------------------
+
 intents = discord.Intents.default()
 intents.message_content = True 
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -21,6 +29,20 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 song_queue = asyncio.Queue()
 
 def download_audio(url):
+    # 1. Check Cache
+    ydl_opts_info = {'quiet': True, 'no_warnings': True, 'format': 'bestaudio/best'}
+    with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+        try:
+            info = ydl.extract_info(url, download=False)
+            title = info.get('title', 'song').replace('/', '_')
+            expected_file = os.path.join(DOWNLOADS_DIR, f"{title}.m4a")
+            if os.path.exists(expected_file):
+                print(f"--- Cache Hit: {expected_file} ---")
+                return expected_file
+        except:
+            pass
+
+    # 2. Download
     ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{
@@ -28,10 +50,10 @@ def download_audio(url):
             'preferredcodec': 'm4a',
             'preferredquality': '192',
         }],
-        # DELETED: 'ffmpeg_location' (Let Railway find it automatically)
-        # DELETED: 'ffprobe_location'
+        # USE THE FOUND PATH HERE
+        'ffmpeg_location': FFMPEG_PATH, 
         'quiet': True,
-        'outtmpl': f'{DOWNLOADS_DIR}/%(title)s.m4a', # FIXED: Relative path
+        'outtmpl': f'{DOWNLOADS_DIR}/%(title)s.m4a',
         'default_search': 'ytsearch',
         'nocheckcertificate': True
     }
@@ -57,7 +79,7 @@ async def add_to_queue(ctx, url):
     audio_file = await async_download_audio(url)
     
     if audio_file is None:
-        await ctx.send("Could not download that song.")
+        await ctx.send("Could not download that song. (Check logs for ffmpeg error)")
         return
 
     await song_queue.put(audio_file)
@@ -65,67 +87,3 @@ async def add_to_queue(ctx, url):
 
     if ctx.voice_client is None:
         if ctx.author.voice:
-            await ctx.author.voice.channel.connect()
-        else:
-            await ctx.send("You need to be in a voice channel!")
-            return
-
-    if not ctx.voice_client.is_playing():
-        await play_next_song(ctx)
-
-async def play_next_song(ctx):
-    if not song_queue.empty():
-        audio_file = await song_queue.get()
-        
-        if not audio_file or not os.path.exists(audio_file):
-            await play_next_song(ctx)
-            return
-
-        source = discord.FFmpegPCMAudio(
-            executable="ffmpeg", # FIXED: Removed /usr/bin/
-            source=audio_file,
-            before_options="-nostdin",
-            options="-vn"
-        )
-
-        ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next_song(ctx), bot.loop))
-    else:
-        await ctx.send("Queue is empty.")
-
-@bot.command()
-async def play(ctx, url):
-    # Added your playlist support back in
-    if "list=" in url:
-        await ctx.send(f"Playlist detected! Processing first 10 songs... 📜")
-        ydl_opts = {'quiet': True, 'extract_flat': True, 'playlistend': 10}
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            try:
-                info = ydl.extract_info(url, download=False)
-                for entry in info.get('entries', []):
-                    song_url = entry.get('url')
-                    if song_url:
-                        if not song_url.startswith('http'):
-                            song_url = f"https://www.youtube.com/watch?v={song_url}"
-                        await add_to_queue(ctx, song_url)
-            except Exception as e:
-                await ctx.send(f"Playlist error: {e}")
-    else:
-        await add_to_queue(ctx, url)
-
-@bot.command()
-async def leave(ctx):
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
-        for file in os.listdir(DOWNLOADS_DIR):
-            try: os.remove(os.path.join(DOWNLOADS_DIR, file))
-            except: pass
-    else:
-        await ctx.send("I'm not in a voice channel!")
-
-@bot.command()
-async def skip(ctx):
-    if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.stop()
-        await ctx.send("Skipped! ⏭️")
-
-bot.run(TOKEN)
