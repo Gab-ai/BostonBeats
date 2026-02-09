@@ -55,3 +55,61 @@ async def play_next_song(ctx):
         # We removed 'before_options' because you cannot use -reconnect on a local file.
         source = await discord.FFmpegOpusAudio.from_probe(
             audio_file,
+            executable="ffmpeg"
+        )
+        
+        def after_playing(error):
+            if error:
+                print(f"Playback Error: {error}")
+            asyncio.run_coroutine_threadsafe(play_next_song(ctx), bot.loop)
+
+        ctx.voice_client.play(source, after=after_playing)
+        await ctx.send(f"▶️ Now playing: **{os.path.basename(audio_file)}**")
+        
+    except Exception as e:
+        print(f"CRITICAL PLAYBACK ERROR: {e}")
+        await ctx.send(f"Error playing audio: {e}")
+        await play_next_song(ctx)
+
+async def add_to_queue(ctx, url):
+    if "music.youtube.com" in url:
+        url = url.replace("music.youtube.com", "www.youtube.com")
+    
+    msg = await ctx.send(f"Downloading... 🎧")
+    audio_file = await async_download_audio(url)
+    
+    if not audio_file:
+        await msg.edit(content="Could not download that song.")
+        return
+
+    await song_queue.put(audio_file)
+    await msg.edit(content=f"Added to queue: **{os.path.basename(audio_file)}**")
+
+    if ctx.voice_client is None:
+        if ctx.author.voice:
+            await ctx.author.voice.channel.connect()
+        else:
+            await ctx.send("You need to be in a voice channel!")
+            return
+
+    if not ctx.voice_client.is_playing():
+        await play_next_song(ctx)
+
+@bot.command()
+async def play(ctx, url):
+    await add_to_queue(ctx, url)
+
+@bot.command()
+async def leave(ctx):
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+    else:
+        await ctx.send("I'm not in a voice channel!")
+
+@bot.command()
+async def skip(ctx):
+    if ctx.voice_client and ctx.voice_client.is_playing():
+        ctx.voice_client.stop()
+        await ctx.send("Skipped! ⏭️")
+
+bot.run(TOKEN)
