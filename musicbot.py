@@ -9,15 +9,34 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-# Define the bot and its command prefix
-intents = discord.Intents.all()
+# Ensure the downloads directory exists
+DOWNLOADS_DIR = './downloads'
+os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+
+# Define the bot with necessary intents
+intents = discord.Intents.default()
+intents.message_content = True 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Define a queue for songs
 song_queue = asyncio.Queue()
 
-# Function to download audio from YouTube
 def download_audio(url):
+    # 1. Check Cache First
+    ydl_opts_info = {'quiet': True, 'no_warnings': True, 'format': 'bestaudio/best'}
+    with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+        try:
+            info = ydl.extract_info(url, download=False)
+            # Create a safe filename check
+            title = info.get('title', 'song').replace('/', '_')
+            expected_file = os.path.join(DOWNLOADS_DIR, f"{title}.m4a")
+            
+            if os.path.exists(expected_file):
+                print(f"--- Cache Hit: {expected_file} ---")
+                return expected_file
+        except:
+            pass
+
+    # 2. Download if not cached
     ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{
@@ -25,13 +44,10 @@ def download_audio(url):
             'preferredcodec': 'm4a',
             'preferredquality': '192',
         }],
-        'ffmpeg_location': '/usr/bin/ffmpeg',
-        'ffprobe_location': '/usr/bin/ffprobe',
-        'postprocessor_args': ['-hide_banner'],
+        'ffmpeg_location': 'ffmpeg', 
         'quiet': True,
-        'outtmpl': '/home/scoutregiment830/bot_env/downloads/%(title)s.m4a',
+        'outtmpl': f'{DOWNLOADS_DIR}/%(title)s.m4a',
         'default_search': 'ytsearch',
-        'source_address': '0.0.0.0',
         'nocheckcertificate': True
     }
 
@@ -47,41 +63,41 @@ async def async_download_audio(url):
     loop = asyncio.get_event_loop()
     with concurrent.futures.ThreadPoolExecutor() as pool:
         return await loop.run_in_executor(pool, download_audio, url)
-    
-# Function to add songs to the queue
+
 async def add_to_queue(ctx, url):
-    # Replace YouTube Music links with standard YouTube links
     if url.startswith("https://music.youtube.com"):
         url = url.replace("https://music.youtube.com", "https://www.youtube.com")
-        await ctx.send("Detected YouTube Music link, converting to YouTube link...")
+    
+    await ctx.send(f"Processing... 🎧")
+    audio_file = await async_download_audio(url)
+    
+    if audio_file is None:
+        await ctx.send("Could not download that song.")
+        return
 
-    audio_file = download_audio(url)
     await song_queue.put(audio_file)
-    await ctx.send(f"Added to queue: {url}")
+    await ctx.send(f"Added to queue!")
 
-    # Check if the bot is connected to a voice channel first
     if ctx.voice_client is None:
-        if ctx.author.voice:  # Check if the user is in a voice channel
+        if ctx.author.voice:
             await ctx.author.voice.channel.connect()
         else:
-            await ctx.send("You need to be in a voice channel first!")
+            await ctx.send("You need to be in a voice channel!")
             return
 
-    # Check if a song is already playing
     if not ctx.voice_client.is_playing():
         await play_next_song(ctx)
 
-
-
-
-# Function to play the next song in the queue
 async def play_next_song(ctx):
     if not song_queue.empty():
         audio_file = await song_queue.get()
-        print(f"Playing: {audio_file}")
+        
+        if not audio_file or not os.path.exists(audio_file):
+            await play_next_song(ctx)
+            return
 
         source = discord.FFmpegPCMAudio(
-            executable="/usr/bin/ffmpeg",
+            executable="ffmpeg",
             source=audio_file,
             before_options="-nostdin",
             options="-vn"
@@ -91,100 +107,40 @@ async def play_next_song(ctx):
     else:
         await ctx.send("Queue is empty.")
 
-
-
-# Command to join a voice channel
 @bot.command()
-async def join(ctx):
-    if ctx.author.voice:
-        channel = ctx.author.voice.channel
-        await channel.connect()
-        await ctx.send("Joined the voice channel!")
+async def play(ctx, url):
+    if "list=" in url:
+        await ctx.send(f"Playlist detected! Processing first 10 songs... 📜")
+        ydl_opts = {'quiet': True, 'extract_flat': True, 'playlistend': 10}
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                info = ydl.extract_info(url, download=False)
+                for entry in info.get('entries', []):
+                    song_url = entry.get('url')
+                    if song_url:
+                        if not song_url.startswith('http'):
+                            song_url = f"https://www.youtube.com/watch?v={song_url}"
+                        await add_to_queue(ctx, song_url)
+            except Exception as e:
+                await ctx.send(f"Playlist error: {e}")
     else:
-        await ctx.send("You need to join a voice channel first!")
+        await add_to_queue(ctx, url)
 
-# Command to leave a voice channel
 @bot.command()
 async def leave(ctx):
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
-        await ctx.send("Left the voice channel!")
+        # Clean up files to keep Railway storage happy
+        for file in os.listdir(DOWNLOADS_DIR):
+            try: os.remove(os.path.join(DOWNLOADS_DIR, file))
+            except: pass
     else:
         await ctx.send("I'm not in a voice channel!")
 
-# Command to play a song or playlist
-@bot.command()
-async def play(ctx, url):
-    # Check if it's a playlist
-    if 'playlist' in url:
-        await ctx.send("Detected a playlist, fetching songs...")
-        ydl_opts = {'quiet': True}
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            for entry in info['entries']:
-                song_url = entry['webpage_url']
-                await add_to_queue(ctx, song_url)
-    else:
-        # If it's a single song
-        await add_to_queue(ctx, url)
-
-# Command to pause the song
-@bot.command()
-async def pause(ctx):
-    if ctx.voice_client.is_playing():
-        ctx.voice_client.pause()
-        await ctx.send("Paused the song!")
-    else:
-        await ctx.send("No song is currently playing.")
-
-# Command to resume the song
-@bot.command()
-async def resume(ctx):
-    if ctx.voice_client.is_paused():
-        ctx.voice_client.resume()
-        await ctx.send("Resumed the song!")
-    else:
-        await ctx.send("No song is currently paused.")
-
-# Command to stop the song
-@bot.command()
-async def stop(ctx):
-    if ctx.voice_client.is_playing():
-        ctx.voice_client.stop()
-        await ctx.send("Stopped the song!")
-    else:
-        await ctx.send("No song is currently playing.")
-
-# Command to skip the current song
 @bot.command()
 async def skip(ctx):
-    if ctx.voice_client.is_playing():
+    if ctx.voice_client and ctx.voice_client.is_playing():
         ctx.voice_client.stop()
-        await ctx.send("Skipped the song!")
-    else:
-        await ctx.send("No song to skip!")
+        await ctx.send("Skipped! ⏭️")
 
-# Command to view the queue
-@bot.command()
-async def queue(ctx):
-    if song_queue.empty():
-        await ctx.send("The queue is empty!")
-        print("Queue is empty.")
-    else:
-        queue_list = list(song_queue._queue)
-        print(f"Current queue: {queue_list}")
-        message = "🎶 **Current Queue:**\n"
-        for idx, song in enumerate(queue_list, 1):
-            message += f"{idx}. {song}\n"
-        await ctx.send(message)
-
-
-# Command to clear the queue
-@bot.command()
-async def clear(ctx):
-    while not song_queue.empty():
-        await song_queue.get()
-    await ctx.send("Cleared the queue!")
-
-# Run the bot
 bot.run(TOKEN)
