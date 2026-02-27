@@ -1,17 +1,17 @@
 FROM python:3.11-slim
 
 # Install system dependencies
-# ffmpeg: For audio conversion
-# git: For yt-dlp dependencies
-# libopus-dev: REQUIRED for Discord voice audio
-# libffi-dev & libsodium-dev: Required for PyNaCl (voice encryption)
-# nodejs: Fixes the yt-dlp "JavaScript" warning and speeds up downloads
+# ca-certificates: Ensures secure connections to YouTube
+# nodejs: Required for yt-dlp to run signature descrambling scripts
 RUN apt-get update && \
-    apt-get install -y ffmpeg git libopus-dev libffi-dev libsodium-dev nodejs && \
+    apt-get install -y ffmpeg git libopus-dev libffi-dev libsodium-dev nodejs ca-certificates && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Ensure downloads directory is ready and writeable
+RUN mkdir -p downloads && chmod 777 downloads
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
